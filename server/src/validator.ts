@@ -29,14 +29,20 @@ const READ_TYPES = new Set(['select', 'union', 'union all', 'with', 'with recurs
 const BLOCKED_FUNCTIONS = new Set([
   'dblink', 'set_config', 'current_setting', 'query_to_xml', 'xpath',
   'txid_current', 'lastval', 'nextval', 'setval',
-  // Beyond the brief: functions that run SQL text or read large objects
-  // without going through a table reference the validator can see.
+  // Functions that run SQL text, or open a relation by name, without going
+  // through a table reference the validator can see.
   'ts_stat', 'loread', 'lowrite',
+  // ts_rewrite(tsquery, text) executes the text as a query and could read the
+  // catalogues. currtid2 and currval open a relation or sequence by name.
+  'ts_rewrite', 'currtid', 'currtid2', 'currval',
+  // Shows the running statement, and index maintenance calls.
+  'current_query', 'gin_clean_pending_list',
 ]);
 
 // Prefix and pattern blocks, applied to the lower-cased function name.
 // `*_to_xml*` covers table_to_xml, query_to_xml_and_xmlschema, cursor_to_xml, etc.
-const BLOCKED_FUNCTION_PATTERNS: readonly RegExp[] = [/^pg_/, /^lo_/, /^dblink/, /_to_xml/];
+// `brin_*` covers the BRIN index maintenance functions.
+const BLOCKED_FUNCTION_PATTERNS: readonly RegExp[] = [/^pg_/, /^lo_/, /^dblink/, /_to_xml/, /^brin_/];
 
 // Function schema other than these is rejected (a bare name or pg_catalog only).
 const ALLOWED_FUNCTION_SCHEMAS = new Set(['pg_catalog']);

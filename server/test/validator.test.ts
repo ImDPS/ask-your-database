@@ -378,3 +378,32 @@ describe('output details', () => {
     }
   });
 });
+
+// Functions that run SQL given as text, or read a relation by name, must be
+// refused with a reason that names the function (a refusal for some other
+// reason would not prove the block works).
+describe('functions that execute text or bypass table checks', () => {
+  const reasonFor = (sql: string) => {
+    const r = validateSql(sql);
+    expect(r.ok, `should reject: ${sql}`).toBe(false);
+    return r.ok ? '' : r.reason;
+  };
+  it.each([
+    ['ts_rewrite runs a query given as text (catalogue leak)', "SELECT ts_rewrite('x'::tsquery, 'SELECT ''x''::tsquery, to_tsquery(''simple'', string_agg(rolname, '' | '')) FROM pg_roles') AS leaked", 'ts_rewrite'],
+    ['ts_rewrite, schema-qualified', "SELECT pg_catalog.ts_rewrite('a'::tsquery, 'SELECT 1')", 'ts_rewrite'],
+    ['ts_rewrite, quoted', "SELECT \"ts_rewrite\"('a'::tsquery, 'SELECT 1')", 'ts_rewrite'],
+    ['ts_rewrite, quoted and schema-qualified', "SELECT \"pg_catalog\".\"ts_rewrite\"('a'::tsquery, 'SELECT 1')", 'ts_rewrite'],
+    ['ts_rewrite, upper case', "SELECT TS_REWRITE('a'::tsquery, 'SELECT 1')", 'ts_rewrite'],
+    ['ts_rewrite in FROM', "SELECT * FROM ts_rewrite('a'::tsquery, 'SELECT 1') AS r", 'ts_rewrite'],
+    ['ts_rewrite inside a window clause', "SELECT rank() OVER (ORDER BY ts_rewrite('a'::tsquery, 'SELECT 1')) FROM genres", 'ts_rewrite'],
+    ['currtid2 reads a row pointer by relation name', "SELECT currtid2('customer', '(0,1)'::tid)", 'currtid2'],
+    ['currtid2, schema-qualified', "SELECT pg_catalog.currtid2('customer', '(0,1)'::tid)", 'currtid2'],
+    ['currtid2, quoted', "SELECT \"currtid2\"('customer', '(0,1)'::tid)", 'currtid2'],
+    ['currval reads a sequence by name', "SELECT currval('s')", 'currval'],
+    ['current_query shows the running statement', 'SELECT current_query()', 'current_query'],
+    ['brin_summarize_new_values is maintenance', "SELECT brin_summarize_new_values('customer')", 'brin_summarize_new_values'],
+    ['gin_clean_pending_list is maintenance', "SELECT gin_clean_pending_list('customer')", 'gin_clean_pending_list'],
+  ])('%s', (_n, sql, fn) => {
+    expect(reasonFor(sql)).toMatch(new RegExp(`Function not allowed: .*${fn}`));
+  });
+});
