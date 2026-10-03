@@ -33,11 +33,17 @@ export async function runQuery(pool: pg.Pool, input: string): Promise<QueryResul
     await client.query(`SET LOCAL statement_timeout = ${TIMEOUT_MS}`);
     // Same shape the validator parses: the newline before the closing bracket
     // stops a trailing "-- comment" from swallowing ") AS q LIMIT ...".
-    const res = await client.query({
+    // The extended protocol takes one statement per query, so a second
+    // statement smuggled past the validator is refused by the server. BEGIN,
+    // SET LOCAL and ROLLBACK are fixed text of ours and use the simple protocol.
+    // @types/pg does not list queryMode, hence the cast.
+    const config = {
       text: `SELECT * FROM (${v.sql}
 ) AS q LIMIT ${MAX_ROWS + 1}`,
       rowMode: 'array',
-    });
+      queryMode: 'extended',
+    } as pg.QueryArrayConfig;
+    const res = await client.query(config);
     const columns = res.fields.map((f) => f.name);
     // Rows are keyed by column name, so duplicates would silently lose values.
     if (new Set(columns).size !== columns.length) throw new QueryFailed(DUPLICATE_COLUMNS);
