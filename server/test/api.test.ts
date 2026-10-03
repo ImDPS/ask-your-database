@@ -117,6 +117,102 @@ describe('api', () => {
   });
 });
 
+describe('429 and the daily cap', () => {
+  it('does not take the daily cap for a rate-limited request', async () => {
+    const { app, provider } = make(['SELECT genre_name FROM genres LIMIT 1'], 1, 2);
+    const post = (ip: string) => request(app).post('/api/ask').set('X-Forwarded-For', ip).send({ question: 'a' });
+    expect((await post('203.0.113.5')).status).toBe(200);
+    expect((await post('203.0.113.5')).status).toBe(429);
+    expect((await post('203.0.113.6')).status).toBe(200); // cap of 2: the 429 did not use a slot
+    expect(provider.calls).toHaveLength(2);
+    expect((await post('203.0.113.7')).status).toBe(503); // now both slots are used
+  });
+});
+
+describe('errors that escape the handlers', () => {
+  const GENERIC_BODY = { error: { kind: 'failed', message: GENERIC } };
+  const brokenPool = { connect: () => { throw new Error('boom'); } } as unknown as typeof pool;
+  const okProvider = new FakeProvider(['SELECT genre_name FROM genres LIMIT 1']);
+  const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+  const noLeak = (text: string) => { expect(text).not.toContain('boom'); expect(text).not.toMatch(/\bat \S+ \(|stack/i); };
+  const alive = async (app: ReturnType<typeof createApp>) => {
+    expect((await request(app).get('/api/health').timeout(2000)).body).toEqual({ ok: true });
+  };
+
+  it('a pool whose connect throws gives a JSON failure for /api/ask and the process stays up', async () => {
+    const app = createApp({ pool: brokenPool, provider: new FakeProvider(['SELECT genre_name FROM genres LIMIT 1']), schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: new DailyCap(100) });
+    const spy = quiet();
+    try {
+      const res = await request(app).post('/api/ask').timeout(2000).send({ question: 'a' });
+      expect(res.status).toBe(422); // ask maps a query that failed twice to failed with sql
+      expect(res.body.error.kind).toBe('failed');
+      noLeak(res.text);
+      await alive(app);
+    } finally { spy.mockRestore(); }
+  });
+  it('a provider that rejects with a plain Error gives the generic 500 and the process stays up', async () => {
+    const app = withProvider({ generateSql: () => Promise.reject(new Error('boom')) });
+    const spy = quiet();
+    try {
+      const res = await request(app).post('/api/ask').timeout(2000).send({ question: 'a' });
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual(GENERIC_BODY);
+      noLeak(res.text);
+      await alive(app);
+    } finally { spy.mockRestore(); }
+  });
+  it('a throw in the handler outside ask (rate limiter) reaches the JSON error handler', async () => {
+    const limiter = { allow: () => { throw new Error('boom'); } } as unknown as RateLimiter;
+    const app = createApp({ pool, provider: okProvider, schemaText: 's', rateLimiter: limiter, dailyCap: new DailyCap(100) });
+    const spy = quiet();
+    try {
+      const res = await request(app).post('/api/ask').timeout(2000).send({ question: 'a' });
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual(GENERIC_BODY);
+      noLeak(res.text);
+      expect(spy.mock.calls[0].map(String).join(' ')).toContain('Error: boom'); // name and message only
+      expect(spy.mock.calls[0].every((a) => typeof a === 'string')).toBe(true);
+      await alive(app);
+    } finally { spy.mockRestore(); }
+  });
+  it('a throw in the daily cap reaches the JSON error handler', async () => {
+    const cap = { tryTake: () => { throw new Error('boom'); } } as unknown as DailyCap;
+    const app = createApp({ pool, provider: okProvider, schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: cap });
+    const spy = quiet();
+    try {
+      const res = await request(app).post('/api/ask').timeout(2000).send({ question: 'a' });
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual(GENERIC_BODY);
+      await alive(app);
+    } finally { spy.mockRestore(); }
+  });
+  it('a pool whose connect throws gives a JSON 500 with the sql for the cached example', async () => {
+    const app = createApp({ pool: brokenPool, provider: okProvider, schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: new DailyCap(100) });
+    const spy = quiet();
+    try {
+      const res = await request(app).get('/api/examples/1/answer').timeout(2000);
+      expect(res.status).toBe(500);
+      expect(res.body.error.kind).toBe('failed');
+      expect(res.body.sql).toContain('invoices');
+      noLeak(res.text);
+      await alive(app);
+    } finally { spy.mockRestore(); }
+  });
+  it('a throw inside the cached-example handler outside its own try reaches the JSON error handler', async () => {
+    const { app } = make(['x']);
+    const { EXAMPLES } = await import('../src/examples.js');
+    const find = vi.spyOn(EXAMPLES, 'find').mockImplementation(() => { throw new Error('boom'); });
+    const spy = quiet();
+    try {
+      const res = await request(app).get('/api/examples/1/answer').timeout(2000);
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual(GENERIC_BODY);
+      noLeak(res.text);
+    } finally { find.mockRestore(); spy.mockRestore(); }
+    await alive(app);
+  });
+});
+
 describe('json errors', () => {
   const BAD = { error: { kind: 'bad_request', message: 'That request could not be read.' } };
   it('answers malformed JSON with 400 JSON, not an HTML page or a stack', async () => {

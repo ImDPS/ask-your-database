@@ -1,4 +1,4 @@
-import express, { type ErrorRequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import path from 'node:path';
 import type pg from 'pg';
 import type { LlmProvider } from './llm/provider.js';
@@ -20,7 +20,8 @@ const GENERIC_ERROR = 'Something went wrong on the server. Please try again.';
 
 // Malformed JSON and oversized bodies come from express.json before any route runs.
 // Answer in JSON, never with Express's HTML page or a stack trace.
-const jsonErrors: ErrorRequestHandler = (err, _req, res, _next) => {
+const jsonErrors: ErrorRequestHandler = (err, _req, res, next) => {
+  if (res.headersSent) return next(err);
   const status = Number(err?.status ?? err?.statusCode);
   if (status === 413) {
     return res.status(413).json({ error: { kind: 'bad_request', message: 'That request could not be read.' } });
@@ -31,6 +32,12 @@ const jsonErrors: ErrorRequestHandler = (err, _req, res, _next) => {
   console.error('[app] unexpected failure:', err instanceof Error ? `${err.name}: ${err.message}` : 'non-Error thrown');
   return res.status(500).json({ error: { kind: 'failed', message: GENERIC_ERROR } });
 };
+
+// Express 4 does not catch a rejected promise from an async handler. Forward it to the
+// error handler instead, otherwise the request hangs and Node exits on the rejection.
+function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>): RequestHandler {
+  return (req, res, next) => { fn(req, res, next).catch(next); };
+}
 
 export function createApp(deps: AppDeps) {
   const app = express();
@@ -51,7 +58,7 @@ export function createApp(deps: AppDeps) {
   app.get('/api/catalog', (_req, res) => res.json(CATALOG));
   app.get('/api/examples', (_req, res) => res.json(EXAMPLES.map(({ id, question }) => ({ id, question }))));
 
-  app.get('/api/examples/:id/answer', async (req, res) => {
+  app.get('/api/examples/:id/answer', asyncHandler(async (req, res) => {
     const ex = EXAMPLES.find((e) => e.id === Number(req.params.id));
     if (!ex) return res.status(404).json({ error: { kind: 'not_found', message: 'Unknown example.' } });
     try {
@@ -61,9 +68,9 @@ export function createApp(deps: AppDeps) {
       const m = e instanceof QueryFailed || e instanceof QueryRejected ? e.message : 'Unexpected error.';
       return res.status(500).json({ error: { kind: 'failed', message: m }, sql: ex.sql });
     }
-  });
+  }));
 
-  app.post('/api/ask', async (req, res) => {
+  app.post('/api/ask', asyncHandler(async (req, res) => {
     const question = typeof req.body?.question === 'string' ? req.body.question : '';
     const q = question.trim();
     if (!q || q.length > MAX_QUESTION_CHARS) {
@@ -85,7 +92,7 @@ export function createApp(deps: AppDeps) {
       : 422;
     const message = status === 500 ? GENERIC_ERROR : out.message;
     return res.status(status).json({ error: { kind: out.kind, message }, ...(out.sql ? { sql: out.sql } : {}) });
-  });
+  }));
 
   // Any other /api path is a JSON 404, never the single page app and never a static file.
   app.use('/api', (_req, res) => res.status(404).json({ error: { kind: 'not_found', message: 'Not found.' } }));
