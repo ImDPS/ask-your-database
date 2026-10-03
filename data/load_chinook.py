@@ -1,10 +1,26 @@
-# Usage: uv run --with "psycopg[binary]" python data/load_chinook.py
+# Usage: uv run --with "psycopg[binary]" python data/load_chinook.py [--confirm]
 # Needs DATABASE_URL_OWNER and READONLY_PASSWORD in the environment. Runs with the owner role only.
-import os, re, pathlib
+# READONLY_PASSWORD must be at least 12 characters and not 'change-me'. For any host other than
+# localhost or 127.0.0.1 (for example Neon) the script refuses to run without --confirm, because it
+# drops the 11 public Chinook tables with CASCADE. See loader_guard.py.
+import os, re, sys, pathlib
+
+root = pathlib.Path(__file__).parent
+sys.path.insert(0, str(root))
+import loader_guard
+
+# Checks come first, before anything is read or any connection is opened.
+url = os.environ.get("DATABASE_URL_OWNER", "")
+pw = os.environ.get("READONLY_PASSWORD", "")
+if not url:
+    sys.exit("DATABASE_URL_OWNER is not set (length 0).")
+problem = loader_guard.check(url, pw, sys.argv[1:])
+if problem:
+    sys.exit(problem)
+
 import psycopg
 from psycopg import sql
 
-root = pathlib.Path(__file__).parent
 raw = (root / "raw" / "Chinook_PostgreSql.sql").read_text(encoding="utf-8")
 # A shared server (and Neon) does not allow creating or switching database from a script.
 raw = re.sub(r"(?im)^\s*(DROP|CREATE)\s+DATABASE\b.*?;\s*$", "", raw)
@@ -14,8 +30,6 @@ raw = re.sub(r"(?im)^\s*\\c\b.*$", "", raw)
 TABLES = ["playlist_track", "playlist", "invoice_line", "invoice", "customer", "employee",
           "track", "album", "artist", "genre", "media_type"]
 
-url = os.environ["DATABASE_URL_OWNER"]
-pw = os.environ["READONLY_PASSWORD"]
 with psycopg.connect(url, autocommit=True) as conn:
     conn.execute("DROP SCHEMA IF EXISTS app CASCADE")
     for t in TABLES:
