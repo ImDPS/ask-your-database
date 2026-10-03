@@ -3,7 +3,7 @@
 import type pg from 'pg';
 import type { LlmProvider } from './llm/provider.js';
 import { ask } from './ask.js';
-import { runQuery } from './executor.js';
+import { runQuery, type QueryResult } from './executor.js';
 import { GOLDEN, type Golden } from './golden.js';
 import { compareResults } from './goldenCompare.js';
 
@@ -24,10 +24,18 @@ export async function runGolden(o: GoldenRunOptions): Promise<{ pass: number; to
   const golden = o.golden ?? GOLDEN;
   log(`Model: ${o.model}`);
   let pass = 0;
+  let calls = 0;
   for (const g of golden) {
-    // Stay under a low per-minute free limit.
-    if (o.pauseMs > 0) await new Promise((r) => setTimeout(r, o.pauseMs));
-    const gold = await runQuery(o.pool, g.goldSql);
+    let gold: QueryResult;
+    try {
+      gold = await runQuery(o.pool, g.goldSql);
+    } catch (e) {
+      // A broken gold query is our fault, not the model's: say so and move on.
+      log(`FAIL ${g.id} ${g.question}  -> gold query failed: ${oneLine(e instanceof Error ? e.message : 'unknown error')}`);
+      continue;
+    }
+    // Stay under a low per-minute free limit: pause between model calls only.
+    if (calls++ > 0 && o.pauseMs > 0) await new Promise((r) => setTimeout(r, o.pauseMs));
     const out = await ask({ pool: o.pool, provider: o.provider, schemaText: o.schemaText }, g.question);
     if (!out.ok) {
       log(`FAIL ${g.id} ${g.question}  -> ${out.kind}: ${out.message}`);

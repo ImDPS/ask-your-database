@@ -38,6 +38,14 @@ describe('runGolden', () => {
     expect(text).toMatch(/DIFF 8 /);
   });
 
+  it('counts an unrounded average as a match (fractions are compared to 2 decimals)', async () => {
+    const replies = GOLDEN.map((g) => g.goldSql);
+    replies[7] = 'SELECT avg(total) FROM invoices'; // 5.6519..., gold is 5.65
+    const { out, text } = await run(new FakeProvider(replies));
+    expect(out.pass).toBe(10);
+    expect(text).toMatch(/PASS 8 /);
+  });
+
   it('prints, for a DIFF, the SQL on one line and the row count of each side', async () => {
     const replies = GOLDEN.map((g) => g.goldSql);
     replies[0] = 'SELECT billing_country,\n       sum(total)\nFROM invoices\nGROUP BY billing_country\nLIMIT 3';
@@ -71,16 +79,39 @@ describe('runGolden', () => {
     expect(text).toMatch(/FAIL 1 .*rejected: /);
   });
 
-  it('pauses between calls by the configured number of milliseconds', async () => {
-    const lines: string[] = [];
-    const started = Date.now();
+  it('pauses between calls (not before the first) by the configured milliseconds', async () => {
     const schemaText = await loadSchemaDescription(pool);
+    const one = GOLDEN.slice(0, 1);
     const two = GOLDEN.slice(0, 2);
-    await runGolden({
-      pool, schemaText, model: 'm', pauseMs: 120, log: (l) => lines.push(l), golden: two,
-      provider: new FakeProvider(two.map((g) => g.goldSql)),
-    });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(220);
+    const timed = async (golden: typeof GOLDEN) => {
+      const started = Date.now();
+      await runGolden({
+        pool, schemaText, model: 'm', pauseMs: 400, log: () => {}, golden,
+        provider: new FakeProvider(golden.map((g) => g.goldSql)),
+      });
+      return Date.now() - started;
+    };
+    expect(await timed(one)).toBeLessThan(350); // no pause before the first call
+    expect(await timed(two)).toBeGreaterThanOrEqual(390); // one pause between two calls
+  });
+
+  it('prints a FAIL line when a gold query fails, skips the model for it and carries on to the summary', async () => {
+    const lines: string[] = [];
+    const schemaText = await loadSchemaDescription(pool);
+    const bad: typeof GOLDEN = [
+      { ...GOLDEN[0], id: 1, goldSql: 'SELECT nope FROM customers' },
+      { ...GOLDEN[1], id: 2, goldSql: 'DELETE FROM customers' },
+      GOLDEN[3],
+    ];
+    const provider = new FakeProvider([GOLDEN[3].goldSql]);
+    const out = await runGolden({ pool, schemaText, provider, model: 'm', pauseMs: 0, log: (l) => lines.push(l), golden: bad });
+    const text = lines.join('\n');
+    expect(out).toEqual({ pass: 1, total: 3 });
+    expect(text).toMatch(/FAIL 1 .*gold query failed: /);
+    expect(text).toMatch(/FAIL 2 .*gold query failed: /);
+    expect(text).toMatch(/PASS 4 /);
+    expect(provider.calls).toHaveLength(1);
+    expect(text).toContain('1 of 3 match the gold answers (model m).');
   });
 
   it('never prints anything that looks like a key', async () => {

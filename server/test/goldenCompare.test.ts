@@ -21,6 +21,44 @@ describe('normaliseCell', () => {
   });
 });
 
+describe('rounding rule: fractions are rounded to 2 decimals on both sides, half away from zero', () => {
+  const same = (a: unknown, b: unknown) => compareResults([{ v: a }], [{ v: b }], true).same;
+  it('matches an unrounded average to the 2 decimal gold value', () => {
+    expect(same(5.6519417, '5.65')).toBe(true);
+    expect(same('5.651941747572816', '5.65')).toBe(true);
+    expect(same('5.65', 5.6519417)).toBe(true);
+  });
+  it('still tells different values apart', () => {
+    expect(same(5.66, '5.65')).toBe(false);
+    expect(same(5.6, '5.65')).toBe(false);
+    expect(same(5.7, 5.65)).toBe(false);
+  });
+  it('keeps numeric strings and numbers equal, integers as integers', () => {
+    expect(same('523.06', 523.06)).toBe(true);
+    expect(same(412, '412')).toBe(true);
+    expect(same(412, 412.4)).toBe(false); // 412.4 stays 412.4, it is not rounded to an integer
+  });
+  it('does not turn a zero-padded code into a number', () => {
+    expect(same('00123', 123)).toBe(false);
+    expect(same('00123', '00123')).toBe(true);
+  });
+  it('rounds halves away from zero, so negatives are symmetric', () => {
+    expect(normaliseCell(5.655)).toBe(5.66);
+    expect(normaliseCell(-5.655)).toBe(-5.66);
+    expect(same(-5.655, -5.66)).toBe(true);
+    expect(same(-5.655, -5.65)).toBe(false);
+    expect(normaliseCell('0.005')).toBe(0.01);
+    expect(normaliseCell('-0.005')).toBe(-0.01);
+  });
+  it('leaves integers, text, null and non-finite numbers alone', () => {
+    expect(normaliseCell(1069)).toBe(1069);
+    expect(normaliseCell('1069')).toBe(1069);
+    expect(normaliseCell(Number.NaN)).toBeNaN();
+    expect(normaliseCell(Infinity)).toBe(Infinity);
+    expect(normaliseCell(null)).toBeNull();
+  });
+});
+
 describe('compareResults', () => {
   it('treats numeric strings and numbers as the same value', () => {
     const gold: Rows = [{ country: 'USA', revenue: '523.06' }];
