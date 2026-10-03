@@ -133,3 +133,33 @@ describe('ask', () => {
     } finally { spy.mockRestore(); }
   });
 });
+
+describe('ask when the database is not reachable', () => {
+  const schemaText = 'schema';
+  const UNAVAILABLE = 'The database is not reachable right now. Please try again in a minute.';
+  const down = { connect: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.1:5432')) } as unknown as typeof pool;
+
+  it('answers unavailable with one model call, no retry and no "rephrase" advice', async () => {
+    const p = new FakeProvider(['SELECT genre_name FROM genres LIMIT 1']);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await ask({ pool: down, provider: p, schemaText }, 'List a genre');
+      expect(r).toEqual({ ok: false, kind: 'unavailable', message: UNAVAILABLE });
+      expect(p.calls).toHaveLength(1);
+      expect(JSON.stringify(r)).not.toMatch(/rephras|10\.0\.0\.1|ECONNREFUSED/);
+    } finally { spy.mockRestore(); }
+  });
+  it('also answers unavailable when the database goes away during the retry', async () => {
+    // First run reaches the real database and fails on a bad column; the retry finds it down.
+    let connects = 0;
+    const flaky = { connect: () => (++connects === 1 ? pool.connect() : Promise.reject(new Error('connect ECONNREFUSED'))) } as unknown as typeof pool;
+    const p = new FakeProvider(['SELECT nope FROM genres', 'SELECT genre_name FROM genres LIMIT 1']);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await ask({ pool: flaky, provider: p, schemaText }, 'List a genre');
+      expect(r).toEqual({ ok: false, kind: 'unavailable', message: UNAVAILABLE });
+      expect(p.calls).toHaveLength(2);
+    } finally { spy.mockRestore(); }
+  });
+});
+

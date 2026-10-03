@@ -3,7 +3,7 @@ import path from 'node:path';
 import type pg from 'pg';
 import type { LlmProvider } from './llm/provider.js';
 import { ask, type AskOutcome } from './ask.js';
-import { runQuery, QueryFailed, QueryRejected } from './executor.js';
+import { runQuery, QueryFailed, QueryRejected, QueryUnavailable } from './executor.js';
 import { MAX_QUESTION_CHARS } from './prompt.js';
 import { RateLimiter, DailyCap } from './guards.js';
 import { EXAMPLES } from './examples.js';
@@ -65,6 +65,7 @@ export function createApp(deps: AppDeps) {
       const r = await runQuery(deps.pool, ex.sql);
       return res.json({ sql: ex.sql, ...r, retried: false, cached: true });
     } catch (e) {
+      if (e instanceof QueryUnavailable) return res.status(503).json({ error: { kind: 'unavailable', message: e.message } });
       const m = e instanceof QueryFailed || e instanceof QueryRejected ? e.message : 'Unexpected error.';
       return res.status(500).json({ error: { kind: 'failed', message: m }, sql: ex.sql });
     }
@@ -87,7 +88,7 @@ export function createApp(deps: AppDeps) {
     if (out.ok) return res.json({ sql: out.sql, ...out.result, retried: out.retried, cached: false });
     // A failure with no sql is a server fault (ask logged it); with sql it is bad SQL after the retry.
     const status = out.kind === 'bad_question' ? 400
-      : out.kind === 'llm' ? 503
+      : out.kind === 'llm' || out.kind === 'unavailable' ? 503
       : out.kind === 'failed' && !out.sql ? 500
       : 422;
     const message = status === 500 ? GENERIC_ERROR : out.message;

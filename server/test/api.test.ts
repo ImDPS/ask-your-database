@@ -139,13 +139,17 @@ describe('errors that escape the handlers', () => {
     expect((await request(app).get('/api/health').timeout(2000)).body).toEqual({ ok: true });
   };
 
-  it('a pool whose connect throws gives a JSON failure for /api/ask and the process stays up', async () => {
-    const app = createApp({ pool: brokenPool, provider: new FakeProvider(['SELECT genre_name FROM genres LIMIT 1']), schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: new DailyCap(100) });
+  it('a pool whose connect throws gives a JSON 503 for /api/ask, one model call, and the process stays up', async () => {
+    // A database that cannot be reached is not the model's fault, so there is
+    // no retry and no advice to rephrase.
+    const provider = new FakeProvider(['SELECT genre_name FROM genres LIMIT 1']);
+    const app = createApp({ pool: brokenPool, provider, schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: new DailyCap(100) });
     const spy = quiet();
     try {
       const res = await request(app).post('/api/ask').timeout(2000).send({ question: 'a' });
-      expect(res.status).toBe(422); // ask maps a query that failed twice to failed with sql
-      expect(res.body.error.kind).toBe('failed');
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ error: { kind: 'unavailable', message: 'The database is not reachable right now. Please try again in a minute.' } });
+      expect(provider.calls).toHaveLength(1);
       noLeak(res.text);
       await alive(app);
     } finally { spy.mockRestore(); }
@@ -186,14 +190,14 @@ describe('errors that escape the handlers', () => {
       await alive(app);
     } finally { spy.mockRestore(); }
   });
-  it('a pool whose connect throws gives a JSON 500 with the sql for the cached example', async () => {
+  it('a pool whose connect throws gives a JSON 503 for the cached example', async () => {
     const app = createApp({ pool: brokenPool, provider: okProvider, schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: new DailyCap(100) });
     const spy = quiet();
     try {
       const res = await request(app).get('/api/examples/1/answer').timeout(2000);
-      expect(res.status).toBe(500);
-      expect(res.body.error.kind).toBe('failed');
-      expect(res.body.sql).toContain('invoices');
+      expect(res.status).toBe(503);
+      expect(res.body.error.kind).toBe('unavailable');
+      expect(res.body.error.message).toMatch(/not reachable/);
       noLeak(res.text);
       await alive(app);
     } finally { spy.mockRestore(); }

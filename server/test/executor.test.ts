@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import pg from 'pg';
 import { getReadonlyPool, getOwnerPool } from '../src/db.js';
-import { runQuery, QueryRejected, QueryFailed, MAX_ROWS } from '../src/executor.js';
+import { runQuery, QueryRejected, QueryFailed, QueryUnavailable, MAX_ROWS } from '../src/executor.js';
 
 const pool = getReadonlyPool();
 const owner = getOwnerPool();
@@ -85,43 +85,55 @@ describe('runQuery', () => {
 });
 
 describe('runQuery error mapping for non-database failures', () => {
-  const GENERIC = 'The query could not be run.';
-  it('maps a connection failure to the generic message without host or port', async () => {
+  // A failure that is not a Postgres error is not something a different query
+  // can fix, so it is reported as unavailable (and never retried by the caller).
+  const UNAVAILABLE = 'The database is not reachable right now. Please try again in a minute.';
+  it('maps a connection failure to QueryUnavailable without host or port', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const fake = { connect: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.1:5432')) } as unknown as pg.Pool;
       const err = await runQuery(fake, 'SELECT 1').catch((e) => e);
-      expect(err).toBeInstanceOf(QueryFailed);
-      expect(err.message).toBe(GENERIC);
+      expect(err).toBeInstanceOf(QueryUnavailable);
+      expect(err).not.toBeInstanceOf(QueryFailed);
+      expect(err.message).toBe(UNAVAILABLE);
       expect(err.message).not.toMatch(/10.0.0.1|5432|ECONNREFUSED/);
       expect(spy).toHaveBeenCalled(); // real error is logged server-side
     } finally { spy.mockRestore(); }
   });
-  it('maps a Postgres error raised by connect (such as a failed login) to the generic message', async () => {
+  it('maps a connect timeout and a dropped connection to QueryUnavailable', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (const msg of ['timeout exceeded when trying to connect', 'Connection terminated unexpectedly']) {
+        const fake = { connect: () => Promise.reject(new Error(msg)) } as unknown as pg.Pool;
+        expect(await runQuery(fake, 'SELECT 1').catch((e) => e)).toBeInstanceOf(QueryUnavailable);
+      }
+    } finally { spy.mockRestore(); }
+  });
+  it('maps a Postgres error raised by connect (such as a failed login) to QueryUnavailable without the user name', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const e = new pg.DatabaseError('password authentication failed for user "app_readonly"', 0, 'error');
       const fake = { connect: () => Promise.reject(e) } as unknown as pg.Pool;
       const err = await runQuery(fake, 'SELECT 1').catch((x) => x);
-      expect(err).toBeInstanceOf(QueryFailed);
-      expect(err.message).toBe(GENERIC);
+      expect(err).toBeInstanceOf(QueryUnavailable);
+      expect(err.message).toBe(UNAVAILABLE);
     } finally { spy.mockRestore(); }
   });
-  it('maps a TypeError raised while running the query to the generic message', async () => {
+  it('maps a non-database error raised while running the query to QueryUnavailable and still releases the connection', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const released: unknown[] = [];
       const client = {
         query: async (q: unknown) => {
-          if (typeof q === 'object') throw new TypeError("Cannot read properties of undefined (reading 'fields')");
+          if (typeof q === 'object') throw new Error('Connection terminated unexpectedly');
           return {};
         },
         release: (arg?: unknown) => { released.push(arg); },
       };
       const fake = { connect: async () => client } as unknown as pg.Pool;
       const err = await runQuery(fake, 'SELECT 1').catch((e) => e);
-      expect(err).toBeInstanceOf(QueryFailed);
-      expect(err.message).toBe(GENERIC);
+      expect(err).toBeInstanceOf(QueryUnavailable);
+      expect(err.message).toBe(UNAVAILABLE);
       expect(released).toHaveLength(1); // connection was still released
     } finally { spy.mockRestore(); }
   });

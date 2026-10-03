@@ -7,7 +7,7 @@ import { validateSql } from './validator.js';
 export const MAX_ROWS = 200;
 export const MAX_RESULT_BYTES = 1_000_000;
 const TIMEOUT_MS = 5000;
-const GENERIC_FAILURE = 'The query could not be run.';
+const UNAVAILABLE = 'The database is not reachable right now. Please try again in a minute.';
 const RESULT_TOO_LARGE = 'That result is too large to show. Ask for fewer rows or shorter columns.';
 // Postgres raises this as "invalid input syntax for type integer" when a page is too large.
 const TOO_LARGE_MARKER = 'RESULT_TOO_LARGE_';
@@ -23,6 +23,7 @@ export interface QueryResult {
 }
 export class QueryRejected extends Error {} // validator said no
 export class QueryFailed extends Error {} // database said no (message is safe to show)
+export class QueryUnavailable extends Error {} // database could not be reached or broke off (a new query will not help)
 
 export async function runQuery(pool: pg.Pool, input: string): Promise<QueryResult> {
   const v = validateSql(input);
@@ -74,18 +75,19 @@ WHERE (SELECT CASE WHEN n > ${MAX_RESULT_BYTES} THEN ('${TOO_LARGE_MARKER}' || n
     };
   } catch (e) {
     if (e instanceof QueryFailed) throw e;
-    // Only a Postgres error carries a message that is safe to show. Anything
-    // else (socket errors with host and port, a bug of ours) is logged here,
-    // without the SQL, and the caller gets a generic message.
-    // A Postgres error from pool.connect() (e.g. a failed login) names the
-    // database user, so only errors raised once a client exists are passed on.
+    // Only a Postgres error raised once a client exists carries a message that
+    // is safe to show, and only that kind of failure is one a changed query can
+    // fix. Anything else (a refused or timed-out connection, an exhausted pool,
+    // a dropped socket, a bug of ours) is logged here, without the SQL, and the
+    // caller gets QueryUnavailable. A Postgres error from pool.connect() (for
+    // example a failed login) names the database user, so it is not passed on.
     if (client && e instanceof pg.DatabaseError) {
       // The marker error is ours; any other invalid-integer error keeps its own message.
       if (e.code === '22P02' && e.message.includes(TOO_LARGE_MARKER)) throw new QueryFailed(RESULT_TOO_LARGE);
       throw new QueryFailed(e.message);
     }
     console.error('[executor] unexpected failure:', e instanceof Error ? `${e.name}: ${e.message}` : 'non-Error thrown');
-    throw new QueryFailed(GENERIC_FAILURE);
+    throw new QueryUnavailable(UNAVAILABLE);
   } finally {
     if (client) {
       try {
