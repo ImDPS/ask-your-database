@@ -6,7 +6,8 @@ export interface Cell {
 
 // The API sends pg numeric and bigint values as strings ("523.06", "412"),
 // so a numeric-looking string is aligned like a number but never reformatted.
-const NUMERIC_STRING = /^-?\d+(\.\d+)?$/
+// Postgres numerics never carry leading zeros, so "00530" (a postal code) is text.
+const NUMERIC_STRING = /^-?(0|[1-9]\d*)(\.\d+)?$/
 const ISO_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):\d{2}(?:\.\d+)?Z$/
 const UTC_MIDNIGHT = /T00:00:00(?:\.0+)?Z$/
 

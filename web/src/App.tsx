@@ -25,29 +25,24 @@ export default function App() {
   const [error, setError] = useState<ApiError | null>(null)
   const [examples, setExamples] = useState<ExampleItem[]>([])
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
-  const [activeExample, setActiveExample] = useState<number | null>(null)
   const latest = useRef(0) // only the newest request may update the page
 
-  const run = useCallback(async (call: () => Promise<Answer>, exampleId: number | null) => {
+  const run = useCallback(async (call: () => Promise<Answer>) => {
     const id = ++latest.current
     setLoading(true)
     setAnswer(null)
     setError(null)
-    setActiveExample(exampleId)
     try {
       const result = await call()
       if (id === latest.current) setAnswer(result)
     } catch (e) {
-      if (id === latest.current) {
-        setError(asApiError(e))
-        setActiveExample(null)
-      }
+      if (id === latest.current) setError(asApiError(e))
     } finally {
       if (id === latest.current) setLoading(false)
     }
   }, [])
 
-  const runExample = useCallback((id: number) => run(() => api.exampleAnswer(id), id), [run])
+  const runExample = useCallback((id: number) => run(() => api.exampleAnswer(id)), [run])
 
   useEffect(() => {
     api.examples().then(setExamples, () => {})
@@ -70,9 +65,9 @@ export default function App() {
         value={question}
         loading={loading}
         onChange={setQuestion}
-        onSubmit={() => void run(() => api.ask(trimmed), null)}
+        onSubmit={() => void run(() => api.ask(trimmed))}
       />
-      <ExampleChips examples={examples} activeId={activeExample} disabled={loading} onRun={(id) => void runExample(id)} />
+      <ExampleChips examples={examples} disabled={loading} onRun={(id) => void runExample(id)} />
 
       <section className="answer" aria-label="Answer" aria-busy={loading}>
         {loading && <p className="muted">Working on it...</p>}

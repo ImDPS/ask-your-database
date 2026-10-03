@@ -13,6 +13,22 @@ describe('formatCell numbers', () => {
     expect(formatCell('1234567.89')).toMatchObject({ text: '1234567.89', numeric: true })
     expect(formatCell('-3.50')).toMatchObject({ text: '-3.50', numeric: true })
   })
+  it('treats zero-padded identifiers such as postal codes as text, shown verbatim', () => {
+    expect(formatCell('00123')).toMatchObject({ text: '00123', numeric: false })
+    expect(formatCell('00530')).toMatchObject({ text: '00530', numeric: false })
+    expect(formatCell('007')).toMatchObject({ text: '007', numeric: false })
+    expect(formatCell('-007')).toMatchObject({ text: '-007', numeric: false })
+  })
+  it('treats real numeric strings, including zero, as numeric', () => {
+    for (const s of ['0', '0.5', '-0.50', '523.06', '412', '0.00']) {
+      expect(formatCell(s)).toMatchObject({ text: s, numeric: true })
+    }
+  })
+  it('keeps treating grouped, exponent, padded and empty strings as text', () => {
+    for (const s of ['1,234', '1e5', ' 12 ', '']) {
+      expect(formatCell(s)).toMatchObject({ text: s, numeric: false })
+    }
+  })
   it('treats other strings as text', () => {
     expect(formatCell('USA')).toMatchObject({ text: 'USA', numeric: false })
     expect(formatCell('12 apples')).toMatchObject({ text: '12 apples', numeric: false })

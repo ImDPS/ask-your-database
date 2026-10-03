@@ -30,6 +30,15 @@ describe('ResultTable', () => {
     expect(cells[3]).not.toHaveClass('num')
   })
 
+  it('left-aligns a column of zero-padded postal codes, header included', () => {
+    render(<ResultTable columns={['postal_code', 'total']} rows={[{ postal_code: '00530', total: '12.50' }, { postal_code: '00123', total: '3' }]} />)
+    const [postal, total] = screen.getAllByRole('columnheader')
+    expect(postal).not.toHaveClass('num')
+    expect(total).toHaveClass('num')
+    expect(screen.getByText('00530')).not.toHaveClass('num')
+    expect(screen.getByText('00123')).not.toHaveClass('num')
+  })
+
   it('keeps numeric strings as given and formats real numbers the Indian way', () => {
     render(<ResultTable columns={['a', 'b']} rows={[{ a: '1234567.89', b: 1234567 }]} />)
     expect(screen.getByText('1234567.89')).toBeInTheDocument()

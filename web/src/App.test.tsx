@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import App from './App'
@@ -120,23 +120,28 @@ describe('result notes', () => {
     await ask('again')
     expect(await screen.findByText(/needed one retry/i)).toBeInTheDocument()
   })
-  it('does not label a typed question as no AI call', async () => {
+  it('labels every example chip with a no AI call note before anything is run', async () => {
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      url === '/api/examples'
+        ? json([{ id: 1, question: 'Top countries?' }, { id: 2, question: 'Best genre?' }])
+        : base(url, init))
     render(<App />)
-    await ask('plain')
-    await screen.findByText('SELECT 1 AS n')
-    expect(screen.queryByText(/no ai call/i)).toBeNull()
+    const chips = within(await screen.findByRole('group', { name: /example questions/i })).getAllByRole('button')
+    expect(chips).toHaveLength(2)
+    for (const chip of chips) expect(chip).toHaveTextContent(/no ai call/i)
+    expect(screen.getAllByText(/no ai call/i)).toHaveLength(2)
   })
-  it('puts the no AI call note on the chip that was run, and removes it after a typed question', async () => {
+  it('does not repeat the no AI call note in the answer area, for an example or a typed question', async () => {
     render(<App />)
-    const chip = await screen.findByRole('button', { name: /top countries/i })
-    expect(chip).not.toHaveTextContent(/no ai call/i)
-    await userEvent.click(chip)
-    expect(await screen.findByText(/no ai call/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /top countries/i })).toHaveTextContent(/no ai call/i)
+    await userEvent.click(await screen.findByRole('button', { name: /top countries/i }))
+    await screen.findByText('SELECT 1 AS n')
+    const region = screen.getByRole('region', { name: /answer/i })
+    expect(within(region).queryByText(/no ai call/i)).toBeNull()
     await userEvent.type(screen.getByLabelText(/your question/i), 'plain')
     await userEvent.click(screen.getByRole('button', { name: /^ask$/i }))
-    await waitFor(() => expect(screen.queryByText(/no ai call/i)).toBeNull())
-    expect(fetchMock.mock.calls.filter((c) => c[0] === '/api/ask')).toHaveLength(1)
+    await waitFor(() => expect(fetchMock.mock.calls.filter((c) => c[0] === '/api/ask')).toHaveLength(1))
+    expect(within(screen.getByRole('region', { name: /answer/i })).queryByText(/no ai call/i)).toBeNull()
   })
   it('calls the example answer endpoint, not the ask endpoint, for a chip', async () => {
     render(<App />)
