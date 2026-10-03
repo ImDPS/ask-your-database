@@ -52,6 +52,62 @@ describe('GeminiProvider', () => {
   });
 });
 
+describe('GeminiProvider replies', () => {
+  const ask = (body: unknown, raw = false) => {
+    const f = (async () => new Response(raw ? String(body) : JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
+    return new GeminiProvider({ apiKey: 'test-key', model: 'm', fetchImpl: f }).generateSql({ system: 's', user: 'u' });
+  };
+  const parts = (p: unknown[], finishReason?: string) => ({ candidates: [{ content: { parts: p }, ...(finishReason ? { finishReason } : {}) }] });
+
+  it('asks for room for a long answer', async () => {
+    let init: RequestInit | undefined;
+    const f = (async (_u: string, i: RequestInit) => { init = i; return new Response(JSON.stringify(okBody)); }) as unknown as typeof fetch;
+    await new GeminiProvider({ apiKey: 'k', model: 'm', fetchImpl: f }).generateSql({ system: 's', user: 'u' });
+    expect(JSON.parse(String(init!.body)).generationConfig.maxOutputTokens).toBe(2048);
+  });
+  it('joins the text of every part', async () => {
+    expect(await ask(parts([{ text: 'SELECT genre_name ' }, { text: 'FROM genres' }]))).toBe('SELECT genre_name FROM genres');
+  });
+  it('skips thought parts', async () => {
+    const out = await ask(parts([{ text: 'Let me think about joins.', thought: true }, { text: 'SELECT 1' }]));
+    expect(out).toBe('SELECT 1');
+  });
+  it('skips parts that have no string text', async () => {
+    expect(await ask(parts([{ functionCall: { name: 'x' } }, { text: 42 }, { text: 'SELECT 2' }]))).toBe('SELECT 2');
+  });
+  it('trims the joined text', async () => {
+    expect(await ask(parts([{ text: '\n  SELECT 3  \n' }]))).toBe('SELECT 3');
+  });
+  it('throws LlmError when only thought parts came back', async () => {
+    await expect(ask(parts([{ text: 'thinking', thought: true }]))).rejects.toBeInstanceOf(LlmError);
+  });
+  it('throws LlmError for whitespace-only text', async () => {
+    await expect(ask(parts([{ text: '   \n ' }]))).rejects.toBeInstanceOf(LlmError);
+  });
+  it('turns MAX_TOKENS into a clear LlmError, even when some text came back', async () => {
+    const err = await ask(parts([{ text: 'SELECT 1 FROM' }], 'MAX_TOKENS')).catch((e) => e);
+    expect(err).toBeInstanceOf(LlmError);
+    expect(err.message).toBe('The language model ran out of room for the answer. Try a shorter question.');
+  });
+  it('throws LlmError (not a TypeError) for a literal null body', async () => {
+    const err = await ask('null', true).catch((e) => e);
+    expect(err).toBeInstanceOf(LlmError);
+    expect(err).not.toBeInstanceOf(TypeError);
+  });
+  it('throws LlmError for odd shapes without throwing a TypeError', async () => {
+    for (const body of [{}, { candidates: null }, { candidates: [null] }, { candidates: [{ content: null }] }, { candidates: [{ content: { parts: 'x' } }] }, 7, 'text']) {
+      const err = await ask(body).catch((e) => e);
+      expect(err).toBeInstanceOf(LlmError);
+    }
+  });
+  it('never puts the key in any error message', async () => {
+    for (const body of [null, {}, parts([{ text: ' ' }]), parts([{ text: 'x' }], 'MAX_TOKENS')]) {
+      const err = await ask(body).catch((e) => e);
+      expect(String(err.message)).not.toContain('test-key');
+    }
+  });
+});
+
 describe('FakeProvider', () => {
   it('returns replies in order, then repeats the last, and records calls', async () => {
     const f = new FakeProvider(['a', 'b']);
