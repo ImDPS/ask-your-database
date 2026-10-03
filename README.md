@@ -35,15 +35,19 @@ question -> model writes SQL -> parser checks -> read-only database -> answer + 
 
 ## Safety
 
-Any one of these layers is meant to stop a bad query on its own.
+The layers overlap, but they are not interchangeable. The database role and the read-only transaction are what stop writes, and what stop reads of the raw tables, even if the validator were fooled. The validator is what keeps generated SQL off the system catalogues and away from blocked functions, because the role can still read `pg_catalog` and `information_schema` by default. Sleep-style functions are refused by the validator and also bounded by the 5 second timeout.
+
+The validator uses a JavaScript SQL parser, and a parser can read SQL differently from Postgres. It already did once, for `U&` unicode-escaped names, which is now guarded. So the validator fails closed on anything it cannot parse, and the read-only role and the read-only transaction exist so that a validator mistake cannot become a write.
 
 | Layer | What it does |
 |---|---|
-| Database role | The app connects as `app_readonly`, which can `SELECT` only from 11 described views in an `app` schema. The raw tables are not readable by it. A separate owner role is used only by the loader. |
-| Validation | Exactly one `SELECT` (or `WITH ... SELECT`) is accepted. Writes, DDL, admin commands, catalogue reads, other schemas and dangerous functions such as `pg_sleep` and `set_config` are refused. |
-| Database limits | `BEGIN READ ONLY`, a 5 second statement timeout, and at most 200 rows returned. |
+| Database role | The app connects as `app_readonly`, which has `SELECT` on 11 described views in an `app` schema and no rights on the raw tables or any write. On its own it stops writes and raw table reads; it does not stop catalogue reads. A separate owner role is used only by the loader. |
+| Validation | Exactly one `SELECT` (or `WITH ... SELECT`) is accepted. Writes, DDL, admin commands, catalogue reads, other schemas and blocked functions such as `pg_sleep` and `set_config` are refused. This is the layer that stops catalogue reads and blocked functions. |
+| Database limits | `BEGIN READ ONLY` (stops writes), a 5 second statement timeout (bounds slow queries, including sleeps), and at most 200 rows returned. |
 | What the model sees | Structure and column descriptions only. The question is marked as a question, not as instructions. Personal-looking columns (addresses, phone numbers, email) are not exposed in the views at all. |
 | Failure handling | A plain message, and at most one automatic retry. Server faults return a generic message, not internals. |
+
+The server also sets these HTTP security headers on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a Content-Security-Policy limited to the page's own origin. The API tests check that they are present.
 
 What is tested (counts are in "How it was verified" below):
 
@@ -57,10 +61,10 @@ What is tested (counts are in "How it was verified" below):
 - A per-client rate limit (5 requests a minute by default, `RATE_LIMIT_PER_MINUTE`).
 - A daily cap on model calls (200 by default, `DAILY_LLM_CAP`).
 - Six cached example answers that never call the model.
-- Length limits: 300 characters for a question, a 4 KB request body, 400 output tokens for the model, 10,000 characters for a query.
+- Length limits: 300 characters for a question, a 4 KB request body, 400 output tokens for the model, 2,000 characters for a generated query.
 - The Gemini key is meant to live in a Google project with no billing attached, so going over the free quota makes calls fail instead of costing money.
 
-The rate limiter and the daily cap live in the server's memory. They reset when the container restarts, so they are for friendliness and for stopping a burst. The no-billing key is the real ceiling.
+The rate limiter and the daily cap live in the server's memory. They reset when the container restarts, so they are for friendliness and for stopping a burst. The no-billing key is meant to be the real ceiling, because a key from a project with no billing cannot be charged. That is Google's behaviour and was not tested here.
 
 ## Stack and why
 
@@ -68,7 +72,7 @@ The rate limiter and the daily cap live in the server's memory. They reset when 
 - **`pgsql-ast-parser`:** a pure JavaScript parser for PostgreSQL, so there is no native build and it behaves the same on Windows and in the container.
 - **`pg`:** the plain driver, with an explicit transaction for every query.
 - **PostgreSQL 16:** the Chinook data and the read-only role. Docker locally, Neon's free plan in production.
-- **React 19 and Vite:** a single page, about 71 kB gzipped, no external requests.
+- **React 19 and Vite:** a single page, about 71 kB gzipped, and it loads nothing from other sites (the page is served with a Content-Security-Policy limited to its own origin).
 - **Gemini free tier, via plain `fetch`:** no SDK to keep up with, easy to fake in tests. A second provider can be added behind the same interface.
 - **vitest and supertest:** server tests run against a real local Postgres, not a mock.
 - **Docker:** one image runs the API and the page.
@@ -128,7 +132,8 @@ The pattern is one container, a managed Postgres and a free model key. Nothing i
 
 - **A valid query can still answer the wrong question.** The SQL is shown so you can check it.
 - **Some valid read-only SQL is refused.** `INTERSECT`, `EXCEPT`, `SELECT INTO`, `EXPLAIN`, `COPY` and a first query wrapped in brackets are rejected by the parser. The app fails closed rather than guess.
-- **Duplicate output column names are rejected.** Two columns both called `id` produce a hint to give each column an alias, and the retry usually fixes it.
+- **The validator relies on a JavaScript SQL parser** that can read SQL differently from Postgres (it differed once, for `U&` unicode-escaped names, which is guarded). It fails closed on anything it cannot parse, and the read-only role and read-only transaction exist so that a validator mistake cannot become a write.
+- **Duplicate output column names are rejected.** Two columns both called `id` produce a hint to give each column an alias, and the retry can fix it (not measured).
 - **A database error can echo a value from the data** into the retry prompt (for example a bad-cast message). The error text is flattened to one line and capped at 300 characters.
 - **The daily cap and rate limiter are in memory** and reset when the container restarts.
 - **One question can cost two model calls** (the first try and the retry), but the daily cap counts one. Set the cap to at most half of the real model limit.
