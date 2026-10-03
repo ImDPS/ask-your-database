@@ -1,0 +1,21 @@
+# planning docs stay local
+docs/
+
+# secrets and local config
+.env
+.env.*
+!.env.example
+
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+*.log
+
+# raw data downloads stay outside git
+data/raw/
+
+# editor and OS
+.vscode/
+.DS_Store
+Thumbs.db
