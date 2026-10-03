@@ -153,9 +153,9 @@ All figures are from runs on a Windows machine with Node 24.19.0 and Docker 29.7
 
 | Fact | Result | Source |
 |---|---|---|
-| Server tests | 515 passed, 18 files | `npm test` (needs the loaded local database) |
+| Server tests | 526 passed, 18 files | `npm test` (needs the loaded local database) |
 | Web tests | 43 passed, 3 files | `npm test` |
-| Total tests | 558 | server and web above |
+| Total tests | 569 | server and web above |
 | Validator cases | 297 (257 rejection, 33 accept, 7 output checks) | vitest JSON report for `server/test/validator.test.ts`, grouped by test group |
 | Read-only role tests | 20 | `server/test/readonly-role.test.ts` |
 | JavaScript bundle | 71.02 kB gzip (226.23 kB raw) | `npm run build` output, Vite; `gzip -9` gives 70,086 bytes |
