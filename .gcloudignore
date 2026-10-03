@@ -1,0 +1,13 @@
+# Files that `gcloud run deploy --source .` must not upload. With this file present, gcloud does not
+# fall back to .gitignore, so the list has to be complete. The Dockerfile builds from source
+# (package files, tsconfig.base.json, server, web), so build output is not needed.
+.env
+.env.*
+!.env.example
+docs/
+node_modules/
+**/node_modules/
+data/raw/
+.git
+*.log
+**/dist/
