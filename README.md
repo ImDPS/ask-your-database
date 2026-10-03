@@ -8,7 +8,7 @@ Live demo: not deployed yet
 
 ## Try it
 
-Six example questions are built into the page. They return a stored answer instantly and make no model call:
+Six example questions are built into the page. Each is a stored question with a stored query, answered from the database once per server start and then kept in memory. They make no model call:
 
 - Which five countries bring in the most revenue?
 - Who are the top 10 customers by total spend?
@@ -25,7 +25,7 @@ Anything you type yourself goes to the language model (up to 300 characters). Op
 2. The model (Gemini, behind a small provider interface) is given the table structure and column descriptions, never any data rows, and writes one `SELECT`.
 3. A Postgres-aware parser checks that the text is exactly one read-only query on the approved views.
 4. The query runs as a read-only database role, inside a read-only transaction, with a time limit and a row limit.
-5. The page shows the answer and the SQL. If the database rejects the query, the error is passed back to the model once for a retry.
+5. The page shows the answer and the SQL. If the database rejects the query, the error is passed back to the model once for a retry. If the database cannot be reached at all, the page says so and no retry is made.
 
 ```
 question -> model writes SQL -> parser checks -> read-only database -> answer + SQL
@@ -35,25 +35,25 @@ question -> model writes SQL -> parser checks -> read-only database -> answer + 
 
 ## Safety
 
-The layers overlap, but they are not interchangeable. The database role and the read-only transaction are what stop writes, and what stop reads of the raw tables, even if the validator were fooled. The validator is what keeps generated SQL off the system catalogues and away from blocked functions, because the role can still read `pg_catalog` and `information_schema` by default. Sleep-style functions are refused by the validator and also bounded by the 5 second timeout.
+The layers overlap, but they are not interchangeable. The database role stops writes to tables and views and reads of the raw tables. The read-only transaction and the extended protocol are separate barriers to a write: the transaction refuses any change, and the extended protocol makes the server refuse a second, stacked statement. Temporary objects and large objects inside a read-write transaction are stopped by the read-only transaction, not by the role. The validator is what keeps generated SQL off the system catalogue tables and away from blocked functions, because the role can still read `pg_catalog` and `information_schema` by default. Sleep-style functions are refused by the validator and also bounded by the 5 second timeout.
 
-The validator uses a JavaScript SQL parser, and a parser can read SQL differently from Postgres. It already did once, for `U&` unicode-escaped names, which is now guarded. So the validator fails closed on anything it cannot parse, and the read-only role and the read-only transaction exist so that a validator mistake cannot become a write.
+The validator uses a JavaScript SQL parser, and a parser can read SQL differently from Postgres. It already did once, for `U&` unicode-escaped names, which is now guarded. So the validator fails closed on anything it cannot parse. Behind it, the role, the read-only transaction and the extended protocol are three separate barriers to a write, and each is tested on its own.
 
 | Layer | What it does |
 |---|---|
-| Database role | The app connects as `app_readonly`, which has `SELECT` on 11 described views in an `app` schema and no rights on the raw tables or any write. On its own it stops writes and raw table reads; it does not stop catalogue reads. A separate owner role is used only by the loader. |
+| Database role | The app connects as `app_readonly`, which has `SELECT` on 11 described views in an `app` schema and no rights on the raw tables or any write. On its own it stops writes to tables and views and reads of the raw tables, and it has no right to create temporary tables. It does not stop catalogue reads, and it does not stop temp objects or large objects by itself inside a read-write transaction (the read-only transaction does). A separate owner role is used only by the loader. |
 | Validation | Exactly one `SELECT` (or `WITH ... SELECT`) is accepted. Writes, DDL, admin commands, catalogue reads, other schemas and blocked functions such as `pg_sleep` and `set_config` are refused. This is the layer that stops catalogue reads and blocked functions. |
-| Database limits | `BEGIN READ ONLY` (stops writes), a 5 second statement timeout (bounds slow queries, including sleeps), and at most 200 rows returned. |
+| Database limits | `BEGIN READ ONLY` (stops writes), the extended protocol (one statement per query, so a stacked second statement is refused), a 5 second statement timeout (bounds slow queries, including sleeps), at most 200 rows, and a result size limit of about 1 MB that Postgres enforces before anything is sent to the server process. |
 | What the model sees | Structure and column descriptions only. The question is marked as a question, not as instructions. Personal-looking columns (addresses, phone numbers, email) are not exposed in the views at all. |
 | Failure handling | A plain message, and at most one automatic retry. Server faults return a generic message, not internals. |
 
-The server also sets these HTTP security headers on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a Content-Security-Policy limited to the page's own origin. The API tests check that they are present.
+The server also sets these HTTP security headers on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a Content-Security-Policy limited to the page's own origin (no `<base>` tag, forms post only to the same origin). The API tests check that they are present.
 
 What is tested (counts are in "How it was verified" below):
 
 - **Validator:** 243 rejection cases (stacked statements, writes inside CTEs, comment tricks, `U&` escapes that hide a function name, catalogue and `pg_` access, and more) and 33 accept cases.
-- **Read-only role:** every attack statement is run twice, once normally and once inside an explicit `READ WRITE` transaction, so the grants are shown to hold without help from the read-only default. A direct read of a raw table is denied.
-- **Executor:** timeout, row cap, no state leaking between requests, no connection details in error messages.
+- **Read-only role:** every attack statement is run twice, once normally and once inside an explicit `READ WRITE` transaction, so the grants are shown to hold without help from the read-only default. A direct read of a raw table is denied, and so is creating a temp table. A separate group of tests records what the role does not stop (`pg_notify`, advisory locks and `lo_create` inside a read-write transaction).
+- **Executor:** timeout, row cap, result size limit, refusal of stacked statements, no state leaking between requests, no connection details in error messages.
 - **Rate limit and daily cap:** unit tests plus API tests, including that a refused request does not use up the daily cap.
 
 ## Cost control
@@ -61,7 +61,7 @@ What is tested (counts are in "How it was verified" below):
 - A per-client rate limit (5 requests a minute by default, `RATE_LIMIT_PER_MINUTE`).
 - A daily cap on model calls (200 by default, `DAILY_LLM_CAP`).
 - Six cached example answers that never call the model.
-- Length limits: 300 characters for a question, a 4 KB request body, 400 output tokens for the model, 2,000 characters for a generated query.
+- Length limits: 300 characters for a question, a 4 KB request body, 2,048 output tokens for the model, 2,000 characters for a generated query, and about 1 MB of result text.
 - The Gemini key is meant to live in a Google project with no billing attached, so going over the free quota makes calls fail instead of costing money.
 
 The rate limiter and the daily cap live in the server's memory. They reset when the container restarts, so they are for friendliness and for stopping a burst. The no-billing key is meant to be the real ceiling, because a key from a project with no billing cannot be charged. That is Google's behaviour and was not tested here.
@@ -132,15 +132,20 @@ The pattern is one container, a managed Postgres and a free model key. Nothing i
 
 - **A valid query can still answer the wrong question.** The SQL is shown so you can check it.
 - **Some valid read-only SQL is refused.** `INTERSECT`, `EXCEPT`, `SELECT INTO`, `EXPLAIN`, `COPY` and a first query wrapped in brackets are rejected by the parser. The app fails closed rather than guess.
-- **The validator relies on a JavaScript SQL parser** that can read SQL differently from Postgres (it differed once, for `U&` unicode-escaped names, which is guarded). It fails closed on anything it cannot parse, and the read-only role and read-only transaction exist so that a validator mistake cannot become a write.
+- **The validator relies on a JavaScript SQL parser** that can read SQL differently from Postgres (it differed once, for `U&` unicode-escaped names, which is guarded). It fails closed on anything it cannot parse. If it were fooled, the role, the read-only transaction and the extended protocol are three separate barriers to a write.
 - **Duplicate output column names are rejected.** Two columns both called `id` produce a hint to give each column an alias, and the retry can fix it (not measured).
 - **A database error can echo a value from the data** into the retry prompt (for example a bad-cast message). The error text is flattened to one line and capped at 300 characters.
-- **The daily cap and rate limiter are in memory** and reset when the container restarts.
+- **The daily cap and rate limiter are in memory** and reset whenever the container restarts, including after every scale to zero. The cap is a friendliness guard; the Gemini key's own quota is the real ceiling.
+- **Per-visitor limiting is keyed on the client address.** Someone who can rotate addresses (IPv6 in particular) can get around it.
+- **The first request after the database has been idle takes longer** while it wakes. The pools wait up to 15 seconds for a connection. The delay was not measured.
+- **Metadata functions still answer.** `version()`, `to_regclass()` and similar calls are allowed, because they return metadata only and no data from the tables.
+- **Temp objects and large objects** are stopped by the read-only transaction, not by the role (see the role row above). `pg_notify` and advisory locks are not stopped by either, so only the validator, which refuses every `pg_*` function, keeps them out. None of them can change the stored data.
+- **Results are limited to about 1 MB of text** (and 200 rows). A larger answer is refused with a message to ask for fewer rows or shorter columns.
 - **One question can cost two model calls** (the first try and the retry), but the daily cap counts one. Set the cap to at most half of the real model limit.
 - **Privacy:** on the Gemini free tier, Google may use questions to improve its products and they may be read by people. The page tells visitors not to enter personal information.
 - **The data is a sample database.** Its customers and sales are not real.
 - **Types in the JSON:** numeric values from the database arrive as text (to keep exact decimals) and dates as ISO strings. The page right-aligns numeric-looking text and shows dates plainly.
-- **Query cost is bounded by limits, not prevented.** Expensive but read-only queries are cut off by the 5 second timeout and the read-only role.
+- **Query cost is bounded by limits, not prevented.** Only the 5 second timeout and the result size limit bound what a query costs; the role does not. An expensive but read-only query runs until the timeout cuts it off.
 
 ## How it was verified
 
