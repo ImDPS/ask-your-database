@@ -5,8 +5,12 @@ import pg from 'pg';
 import { validateSql } from './validator.js';
 
 export const MAX_ROWS = 200;
+export const MAX_RESULT_BYTES = 1_000_000;
 const TIMEOUT_MS = 5000;
 const GENERIC_FAILURE = 'The query could not be run.';
+const RESULT_TOO_LARGE = 'That result is too large to show. Ask for fewer rows or shorter columns.';
+// Postgres raises this as "invalid input syntax for type integer" when a page is too large.
+const TOO_LARGE_MARKER = 'RESULT_TOO_LARGE_';
 const DUPLICATE_COLUMNS =
   'The result has duplicate column names (for example two columns called id). Give each column its own alias with AS.';
 
@@ -37,9 +41,19 @@ export async function runQuery(pool: pg.Pool, input: string): Promise<QueryResul
     // statement smuggled past the validator is refused by the server. BEGIN,
     // SET LOCAL and ROLLBACK are fixed text of ours and use the simple protocol.
     // @types/pg does not list queryMode, hence the cast.
+    //
+    // The innermost part is the shape the validator parses. Around it, Postgres
+    // keeps at most MAX_ROWS + 1 rows and measures their text size; a page over
+    // MAX_RESULT_BYTES raises an error before anything is sent to this process.
+    // The error text is built from the size, not a constant, so the planner
+    // cannot fold the cast and fail at planning time. The final SELECT lists
+    // only the query's own columns.
     const config = {
-      text: `SELECT * FROM (${v.sql}
-) AS q LIMIT ${MAX_ROWS + 1}`,
+      text: `WITH r AS MATERIALIZED (SELECT * FROM (${v.sql}
+) AS q LIMIT ${MAX_ROWS + 1}),
+t AS (SELECT sum(octet_length(r::text)) AS n FROM r)
+SELECT * FROM r
+WHERE (SELECT CASE WHEN n > ${MAX_RESULT_BYTES} THEN ('${TOO_LARGE_MARKER}' || n::text)::int ELSE 0 END FROM t) = 0`,
       rowMode: 'array',
       queryMode: 'extended',
     } as pg.QueryArrayConfig;
@@ -65,7 +79,11 @@ export async function runQuery(pool: pg.Pool, input: string): Promise<QueryResul
     // without the SQL, and the caller gets a generic message.
     // A Postgres error from pool.connect() (e.g. a failed login) names the
     // database user, so only errors raised once a client exists are passed on.
-    if (client && e instanceof pg.DatabaseError) throw new QueryFailed(e.message);
+    if (client && e instanceof pg.DatabaseError) {
+      // The marker error is ours; any other invalid-integer error keeps its own message.
+      if (e.code === '22P02' && e.message.includes(TOO_LARGE_MARKER)) throw new QueryFailed(RESULT_TOO_LARGE);
+      throw new QueryFailed(e.message);
+    }
     console.error('[executor] unexpected failure:', e instanceof Error ? `${e.name}: ${e.message}` : 'non-Error thrown');
     throw new QueryFailed(GENERIC_FAILURE);
   } finally {

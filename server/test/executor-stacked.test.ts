@@ -16,8 +16,10 @@ afterAll(() => pool.end());
 
 describe('runQuery with the extended protocol', () => {
   it('refuses stacked statements even when the validator lets them through', async () => {
-    // Wrapped, this becomes three statements: the first closes the wrapper.
-    const stacked = 'SELECT 1) AS q; SELECT 2; SELECT * FROM (SELECT 3';
+    // Wrapped, this becomes three well-formed statements: the first closes
+    // the wrapper itself, the last borrows the wrapper's tail.
+    const stacked =
+      'SELECT 1) AS q LIMIT 1), t AS (SELECT 1) SELECT 1; SELECT 2; WITH r AS (SELECT * FROM (SELECT 3';
     const err = await runQuery(pool, stacked).catch((e) => e);
     expect(err).toBeInstanceOf(QueryFailed);
     expect(String(err.message)).toMatch(/cannot insert multiple commands into a prepared statement/);
