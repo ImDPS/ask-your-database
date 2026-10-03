@@ -168,10 +168,20 @@ All figures are from runs on a Windows machine with Node 24.19.0 and Docker 29.7
 Not measured: model accuracy, live latency, cold start, Lighthouse scores, and behaviour on a real phone (the page was checked in headless Chrome at 360 pixels wide, in light and dark themes, where the table scrolls inside its box and the page does not widen).
 
 **Model accuracy.** The ten golden questions can be run against the real model with your own key:
+Put the key in the environment of that one command without typing it into the command line, so it stays out of your shell history. In Bash:
 ```bash
-GEMINI_API_KEY=your-key npm run golden:live -w server
+read -rs GEMINI_API_KEY; export GEMINI_API_KEY
+npm run golden:live -w server
+unset GEMINI_API_KEY
 ```
-In PowerShell, set `$env:GEMINI_API_KEY = "your-key"` first.
+In PowerShell:
+```powershell
+$secure = Read-Host -AsSecureString "Gemini API key"
+$env:GEMINI_API_KEY = [System.Net.NetworkCredential]::new('', $secure).Password
+npm run golden:live -w server
+Remove-Item Env:GEMINI_API_KEY
+```
+Do not paste the key into the README, a `.env` file that is committed, an issue or a chat.
 It prints a line per question and a final score, quoted as "matches the gold answers after rounding fractions to 2 decimals". Ties at the edge of a top-10 list and a few phrasing differences can make a correct answer count as a difference, so read the printed SQL for any miss. No score is claimed here because it has not been run.
 
 ## Data credit and licence
