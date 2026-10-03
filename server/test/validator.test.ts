@@ -67,14 +67,14 @@ describe('output', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Extra adversarial cases added in Task 4 (beyond the plan's list).
+// More adversarial cases.
 // ---------------------------------------------------------------------------
 
 describe('known limitation: set operations other than UNION', () => {
   it('rejects INTERSECT', () => {
     // KNOWN LIMITATION, not a security feature: pgsql-ast-parser cannot parse
     // INTERSECT or EXCEPT, so valid read-only SQL is rejected as a parse error
-    // (fail closed). Recorded in docs/plan/notes.md and the README limits.
+    // (fail closed). Listed in the README known limits.
     rejected('SELECT 1 INTERSECT SELECT 1');
   });
   it('rejects EXCEPT', () => {

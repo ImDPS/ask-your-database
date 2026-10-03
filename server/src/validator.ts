@@ -139,7 +139,7 @@ export function validateSql(input: string): ValidationResult {
     // reference is checked.
     collectCteNames(st, cteNames);
 
-    // Pass 2a: the parser's visitor, using the hooks recorded in the spike.
+    // Pass 2a: the parser's visitor, using the hooks the parser provides.
     astVisitor((v) => ({
       // Fires for every statement node, including CTE bodies and subqueries,
       // so a write hidden in a WITH (top-level type `with`) is seen here.
