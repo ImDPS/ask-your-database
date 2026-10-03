@@ -281,3 +281,59 @@ describe('static files', () => {
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe('cached example answers are computed once per process', () => {
+  const counting = () => {
+    const stub = { connects: 0, fail: 0 };
+    const counted = {
+      connect: () => {
+        stub.connects += 1;
+        if (stub.fail > 0) { stub.fail -= 1; return Promise.reject(new Error('connect ECONNREFUSED')); }
+        return pool.connect();
+      },
+    } as unknown as typeof pool;
+    const app = createApp({ pool: counted, provider: new FakeProvider(['x']), schemaText: 's', rateLimiter: new RateLimiter(100), dailyCap: new DailyCap(100) });
+    return { app, stub };
+  };
+
+  it('answers the second request without touching the database, with the answer of the first run', async () => {
+    const { app, stub } = counting();
+    const first = await request(app).get('/api/examples/1/answer');
+    expect(first.status).toBe(200);
+    expect(stub.connects).toBe(1);
+    const second = await request(app).get('/api/examples/1/answer');
+    expect(second.status).toBe(200);
+    expect(stub.connects).toBe(1); // no query for the second request
+    expect(second.body).toEqual(first.body); // including the original elapsedMs
+    expect(second.body.cached).toBe(true);
+  });
+  it('keeps a separate answer for each example', async () => {
+    const { app, stub } = counting();
+    const a = await request(app).get('/api/examples/1/answer');
+    const b = await request(app).get('/api/examples/2/answer');
+    expect(stub.connects).toBe(2);
+    expect(a.body.sql).not.toBe(b.body.sql);
+    await request(app).get('/api/examples/2/answer');
+    expect(stub.connects).toBe(2);
+  });
+  it('shares one run between requests that arrive together', async () => {
+    const { app, stub } = counting();
+    const [a, b] = await Promise.all([request(app).get('/api/examples/3/answer'), request(app).get('/api/examples/3/answer')]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(stub.connects).toBe(1);
+  });
+  it('does not remember a failure: the next request tries again, then the success is kept', async () => {
+    const { app, stub } = counting();
+    stub.fail = 1;
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await request(app).get('/api/examples/1/answer')).status).toBe(503);
+      expect(stub.connects).toBe(1);
+      expect((await request(app).get('/api/examples/1/answer')).status).toBe(200);
+      expect(stub.connects).toBe(2);
+      expect((await request(app).get('/api/examples/1/answer')).status).toBe(200);
+      expect(stub.connects).toBe(2);
+    } finally { spy.mockRestore(); }
+  });
+});

@@ -3,7 +3,7 @@ import path from 'node:path';
 import type pg from 'pg';
 import type { LlmProvider } from './llm/provider.js';
 import { ask, type AskOutcome } from './ask.js';
-import { runQuery, QueryFailed, QueryRejected, QueryUnavailable } from './executor.js';
+import { runQuery, QueryFailed, QueryRejected, QueryUnavailable, type QueryResult } from './executor.js';
 import { MAX_QUESTION_CHARS } from './prompt.js';
 import { RateLimiter, DailyCap } from './guards.js';
 import { EXAMPLES } from './examples.js';
@@ -54,6 +54,20 @@ export function createApp(deps: AppDeps) {
   });
   app.use(express.json({ limit: '4kb' }));
 
+  // Each stored question has one stored query, so its answer is worked out once per
+  // server start and reused. A run that fails is forgotten, so the next request tries
+  // again. The elapsedMs of a reused answer is that of the original run.
+  const exampleRuns = new Map<number, Promise<QueryResult>>();
+  const exampleResult = (id: number, sql: string): Promise<QueryResult> => {
+    let run = exampleRuns.get(id);
+    if (!run) {
+      run = runQuery(deps.pool, sql);
+      exampleRuns.set(id, run);
+      run.catch(() => { if (exampleRuns.get(id) === run) exampleRuns.delete(id); });
+    }
+    return run;
+  };
+
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/catalog', (_req, res) => res.json(CATALOG));
   app.get('/api/examples', (_req, res) => res.json(EXAMPLES.map(({ id, question }) => ({ id, question }))));
@@ -62,7 +76,7 @@ export function createApp(deps: AppDeps) {
     const ex = EXAMPLES.find((e) => e.id === Number(req.params.id));
     if (!ex) return res.status(404).json({ error: { kind: 'not_found', message: 'Unknown example.' } });
     try {
-      const r = await runQuery(deps.pool, ex.sql);
+      const r = await exampleResult(ex.id, ex.sql);
       return res.json({ sql: ex.sql, ...r, retried: false, cached: true });
     } catch (e) {
       if (e instanceof QueryUnavailable) return res.status(503).json({ error: { kind: 'unavailable', message: e.message } });
