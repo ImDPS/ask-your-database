@@ -167,7 +167,7 @@ All figures are from runs on a Windows machine with Node 24.19.0 and Docker 29.7
 
 Not measured: model accuracy, live latency, cold start, Lighthouse scores, and behaviour on a real phone (the page was checked in headless Chrome at 360 pixels wide, in light and dark themes, where the table scrolls inside its box and the page does not widen).
 
-**Model accuracy.** The ten golden questions can be run against the real model with your own key:
+**Model accuracy.** The ten golden questions can be run against the real model with your own key.
 Put the key in the environment of that one command without typing it into the command line, so it stays out of your shell history. The prompt line must be the last line of its block: run the first block, type the key and press Enter, and only then run the second block. Pasting both at once can feed the next line to the prompt as the key.
 
 In Bash:
