@@ -1,4 +1,6 @@
 -- App-facing views over the Chinook tables (public schema, snake_case, unquoted names).
+-- Personal-looking columns (street address, postal code, phone, email, birth date) are left out on
+-- purpose: this is a public demo and no planned question needs them. The raw tables keep them.
 -- The model and the read-only role see only these views. Every view and column has a COMMENT,
 -- and those comments are what the prompt later shows the model as the schema description.
 CREATE SCHEMA app;
@@ -67,8 +69,7 @@ CREATE VIEW app.employees AS
 SELECT e.employee_id, e.first_name, e.last_name,
        e.first_name || ' ' || e.last_name AS full_name,
        e.title, e.reports_to AS reports_to_id,
-       e.birth_date, e.hire_date,
-       e.city, e.state, e.country, e.postal_code, e.phone, e.email
+       e.hire_date, e.country
 FROM public.employee e;
 COMMENT ON VIEW app.employees IS 'One row per staff member of the store. employees.employee_id joins customers.support_rep_id (the sales support agent of a customer). reports_to_id joins employees.employee_id (the manager).';
 COMMENT ON COLUMN app.employees.employee_id IS 'Unique id of the employee.';
@@ -77,20 +78,13 @@ COMMENT ON COLUMN app.employees.last_name IS 'Last name of the employee.';
 COMMENT ON COLUMN app.employees.full_name IS 'First name and last name joined with a space.';
 COMMENT ON COLUMN app.employees.title IS 'Job title, for example Sales Support Agent or General Manager.';
 COMMENT ON COLUMN app.employees.reports_to_id IS 'The employee_id of this employee''s manager. Empty for the top of the hierarchy.';
-COMMENT ON COLUMN app.employees.birth_date IS 'Date of birth of the employee.';
 COMMENT ON COLUMN app.employees.hire_date IS 'Date the employee was hired.';
-COMMENT ON COLUMN app.employees.city IS 'City where the employee lives.';
-COMMENT ON COLUMN app.employees.state IS 'State or province where the employee lives.';
 COMMENT ON COLUMN app.employees.country IS 'Country where the employee lives.';
-COMMENT ON COLUMN app.employees.postal_code IS 'Postal code of the employee''s address.';
-COMMENT ON COLUMN app.employees.phone IS 'Phone number of the employee.';
-COMMENT ON COLUMN app.employees.email IS 'Email address of the employee.';
 
 CREATE VIEW app.customers AS
 SELECT c.customer_id, c.first_name, c.last_name,
        c.first_name || ' ' || c.last_name AS full_name,
-       c.company, c.address, c.city, c.state, c.country, c.postal_code,
-       c.phone, c.email, c.support_rep_id
+       c.company, c.city, c.state, c.country, c.support_rep_id
 FROM public.customer c;
 COMMENT ON VIEW app.customers IS 'One row per customer who buys music. customers.customer_id joins invoices.customer_id; customers.support_rep_id joins employees.employee_id.';
 COMMENT ON COLUMN app.customers.customer_id IS 'Unique id of the customer.';
@@ -98,29 +92,23 @@ COMMENT ON COLUMN app.customers.first_name IS 'First name of the customer.';
 COMMENT ON COLUMN app.customers.last_name IS 'Last name of the customer.';
 COMMENT ON COLUMN app.customers.full_name IS 'First name and last name joined with a space.';
 COMMENT ON COLUMN app.customers.company IS 'Company the customer works for. Often empty.';
-COMMENT ON COLUMN app.customers.address IS 'Street address of the customer.';
 COMMENT ON COLUMN app.customers.city IS 'City where the customer lives.';
 COMMENT ON COLUMN app.customers.state IS 'State or province where the customer lives. Empty for many countries.';
 COMMENT ON COLUMN app.customers.country IS 'Country where the customer lives, for example USA, Brazil or India.';
-COMMENT ON COLUMN app.customers.postal_code IS 'Postal code of the customer''s address.';
-COMMENT ON COLUMN app.customers.phone IS 'Phone number of the customer.';
-COMMENT ON COLUMN app.customers.email IS 'Email address of the customer.';
 COMMENT ON COLUMN app.customers.support_rep_id IS 'The sales support employee assigned to the customer; joins employees.employee_id.';
 
 CREATE VIEW app.invoices AS
 SELECT i.invoice_id, i.customer_id, i.invoice_date,
-       i.billing_address, i.billing_city, i.billing_state, i.billing_country, i.billing_postal_code,
+       i.billing_city, i.billing_state, i.billing_country,
        i.total
 FROM public.invoice i;
 COMMENT ON VIEW app.invoices IS 'One row per sale (invoice). invoices.customer_id joins customers.customer_id; invoice_lines.invoice_id joins invoices.invoice_id. total is the sum of the invoice''s line_total values.';
 COMMENT ON COLUMN app.invoices.invoice_id IS 'Unique id of the invoice.';
 COMMENT ON COLUMN app.invoices.customer_id IS 'The customer who was billed; joins customers.customer_id.';
 COMMENT ON COLUMN app.invoices.invoice_date IS 'Date and time of the sale.';
-COMMENT ON COLUMN app.invoices.billing_address IS 'Street address the invoice was billed to.';
 COMMENT ON COLUMN app.invoices.billing_city IS 'City the invoice was billed to.';
 COMMENT ON COLUMN app.invoices.billing_state IS 'State or province the invoice was billed to. Often empty.';
 COMMENT ON COLUMN app.invoices.billing_country IS 'Country the invoice was billed to. Use this for revenue by country.';
-COMMENT ON COLUMN app.invoices.billing_postal_code IS 'Postal code the invoice was billed to.';
 COMMENT ON COLUMN app.invoices.total IS 'Total amount of the invoice, in US dollars. This is the revenue of the sale.';
 
 CREATE VIEW app.invoice_lines AS
