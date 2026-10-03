@@ -33,6 +33,20 @@ describe('pool factories', () => {
     }
   });
 
+  it.each([
+    ['read-only', 'DATABASE_URL_READONLY', getReadonlyPool],
+    ['owner', 'DATABASE_URL_OWNER', getOwnerPool],
+  ] as const)('%s pool waits up to 15 seconds for a connection (a sleeping database needs a few seconds to wake)', async (_label, key, factory) => {
+    process.env[key] = DUMMY;
+    const pool = factory();
+    try {
+      expect((pool as unknown as { options: { connectionTimeoutMillis: number; max: number } }).options.connectionTimeoutMillis).toBe(15000);
+      expect((pool as unknown as { options: { max: number } }).options.max).toBe(5);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('still throws a clear error when the variable is not set', () => {
     delete process.env.DATABASE_URL_READONLY;
     expect(() => getReadonlyPool()).toThrow('DATABASE_URL_READONLY is not set');
