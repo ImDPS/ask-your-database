@@ -34,7 +34,7 @@ describe('app role is read-only at the database', () => {
     }
   });
 
-  it('read raw table is denied (real unquoted name, see Task 3 notes)', async () => {
+  it('read raw table is denied (the real table name is unquoted)', async () => {
     await expect(ro.query('SELECT 1 FROM public.customer LIMIT 1')).rejects.toThrow(/permission denied/);
   });
 
@@ -43,5 +43,54 @@ describe('app role is read-only at the database', () => {
     await ro.query('DELETE FROM app.customers').catch(() => undefined);
     const after = await owner.query('SELECT count(*)::int AS n FROM app.customers');
     expect(after.rows[0].n).toBe(before.rows[0].n);
+  });
+});
+
+describe('temporary objects', () => {
+  it('the app role cannot create a temp table, even in a READ WRITE transaction', async () => {
+    const c = await ro.connect();
+    try {
+      await c.query('BEGIN READ WRITE');
+      await expect(c.query('CREATE TEMP TABLE t_probe (a int)')).rejects.toThrow(/permission denied/i);
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+  });
+});
+
+describe('what the role alone does not stop', () => {
+  // Some functions are executable by PUBLIC, so the role's grants do not stop
+  // them. Inside an explicit READ WRITE transaction they succeed, which is what
+  // these tests document. Every one is rolled back. In the app the read-only
+  // transaction stops lo_create; pg_notify and advisory locks are allowed even
+  // there, so only the validator (it refuses every pg_* and lo_* function name)
+  // keeps them out. Both are harmless to the data.
+  const inTransaction = async (mode: 'READ WRITE' | 'READ ONLY', sql: string) => {
+    const c = await ro.connect();
+    try {
+      await c.query(`BEGIN ${mode}`);
+      return await c.query(sql);
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+  };
+
+  it('pg_notify succeeds in a READ WRITE transaction', async () => {
+    await expect(inTransaction('READ WRITE', "SELECT pg_notify('probe', 'x')")).resolves.toBeDefined();
+  });
+  it('advisory locks succeed in a READ WRITE transaction', async () => {
+    await expect(inTransaction('READ WRITE', 'SELECT pg_advisory_xact_lock(42)')).resolves.toBeDefined();
+  });
+  it('lo_create succeeds in a READ WRITE transaction', async () => {
+    await expect(inTransaction('READ WRITE', 'SELECT lo_create(0)')).resolves.toBeDefined();
+  });
+  it('the read-only transaction is what stops lo_create in the app', async () => {
+    await expect(inTransaction('READ ONLY', 'SELECT lo_create(0)')).rejects.toThrow(/read-only transaction/i);
+  });
+  it('pg_notify and advisory locks are not stopped even by a read-only transaction', async () => {
+    await expect(inTransaction('READ ONLY', "SELECT pg_notify('probe', 'x')")).resolves.toBeDefined();
+    await expect(inTransaction('READ ONLY', 'SELECT pg_advisory_xact_lock(42)')).resolves.toBeDefined();
   });
 });

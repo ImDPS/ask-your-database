@@ -41,6 +41,10 @@ with psycopg.connect(url, autocommit=True) as conn:
     conn.execute(sql.SQL(verb + " PASSWORD {}").format(sql.Literal(pw)))
     db = conn.execute("SELECT current_database()").fetchone()[0]
     conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO app_readonly").format(sql.Identifier(db)))
+    # TEMP on a database comes through PUBLIC by default. Take it away so the app role cannot
+    # create temporary tables, even inside a read-write transaction.
+    conn.execute(sql.SQL("REVOKE TEMP ON DATABASE {} FROM PUBLIC").format(sql.Identifier(db)))
+    conn.execute(sql.SQL("REVOKE TEMP ON DATABASE {} FROM app_readonly").format(sql.Identifier(db)))
     conn.execute((root / "roles.sql").read_text(encoding="utf-8"))
     n = conn.execute("SELECT count(*) FROM app.customers").fetchone()[0]
     print("customers loaded:", n)
