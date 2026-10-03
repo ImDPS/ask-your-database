@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import pg from 'pg';
 import { getReadonlyPool, getOwnerPool } from '../src/db.js';
 import { runQuery, QueryRejected, QueryFailed, MAX_ROWS } from '../src/executor.js';
@@ -70,5 +70,59 @@ describe('runQuery', () => {
         expect((await c.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('off');
       } finally { c.release(); }
     } finally { await single.end(); }
+  });
+  it('rejects duplicate output column names with a message the model can act on', async () => {
+    const sql = 'SELECT t.track_id, a.track_id FROM tracks t JOIN tracks a ON a.track_id = t.track_id LIMIT 1';
+    const err = await runQuery(pool, sql).catch((e) => e);
+    expect(err).toBeInstanceOf(QueryFailed);
+    expect(String(err.message)).toMatch(/duplicate column/);
+    expect(String(err.message)).toMatch(/AS/);
+  });
+  it('still returns distinct columns that share a prefix or are aliased apart', async () => {
+    const r = await runQuery(pool, 'SELECT t.track_id AS a_id, a.track_id AS b_id FROM tracks t JOIN tracks a ON a.track_id = t.track_id LIMIT 1');
+    expect(r.columns).toEqual(['a_id', 'b_id']);
+  });
+});
+
+describe('runQuery error mapping for non-database failures', () => {
+  const GENERIC = 'The query could not be run.';
+  it('maps a connection failure to the generic message without host or port', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const fake = { connect: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.1:5432')) } as unknown as pg.Pool;
+      const err = await runQuery(fake, 'SELECT 1').catch((e) => e);
+      expect(err).toBeInstanceOf(QueryFailed);
+      expect(err.message).toBe(GENERIC);
+      expect(err.message).not.toMatch(/10.0.0.1|5432|ECONNREFUSED/);
+      expect(spy).toHaveBeenCalled(); // real error is logged server-side
+    } finally { spy.mockRestore(); }
+  });
+  it('maps a Postgres error raised by connect (such as a failed login) to the generic message', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const e = new pg.DatabaseError('password authentication failed for user "app_readonly"', 0, 'error');
+      const fake = { connect: () => Promise.reject(e) } as unknown as pg.Pool;
+      const err = await runQuery(fake, 'SELECT 1').catch((x) => x);
+      expect(err).toBeInstanceOf(QueryFailed);
+      expect(err.message).toBe(GENERIC);
+    } finally { spy.mockRestore(); }
+  });
+  it('maps a TypeError raised while running the query to the generic message', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const released: unknown[] = [];
+      const client = {
+        query: async (q: unknown) => {
+          if (typeof q === 'object') throw new TypeError("Cannot read properties of undefined (reading 'fields')");
+          return {};
+        },
+        release: (arg?: unknown) => { released.push(arg); },
+      };
+      const fake = { connect: async () => client } as unknown as pg.Pool;
+      const err = await runQuery(fake, 'SELECT 1').catch((e) => e);
+      expect(err).toBeInstanceOf(QueryFailed);
+      expect(err.message).toBe(GENERIC);
+      expect(released).toHaveLength(1); // connection was still released
+    } finally { spy.mockRestore(); }
   });
 });
