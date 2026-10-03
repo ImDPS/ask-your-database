@@ -48,13 +48,15 @@ export async function runQuery(pool: pg.Pool, input: string): Promise<QueryResul
     // MAX_RESULT_BYTES raises an error before anything is sent to this process.
     // The error text is built from the size, not a constant, so the planner
     // cannot fold the cast and fail at planning time. The final SELECT lists
-    // only the query's own columns.
+    // only the query's own columns. Every internal name (r, t, n) is qualified
+    // (r.*, t.n), because a bare name would resolve to a column of the user's
+    // query when it has an output column of the same name.
     const config = {
       text: `WITH r AS MATERIALIZED (SELECT * FROM (${v.sql}
 ) AS q LIMIT ${MAX_ROWS + 1}),
-t AS (SELECT sum(octet_length(r::text)) AS n FROM r)
+t AS (SELECT sum(octet_length((r.*)::text)) AS n FROM r)
 SELECT * FROM r
-WHERE (SELECT CASE WHEN n > ${MAX_RESULT_BYTES} THEN ('${TOO_LARGE_MARKER}' || n::text)::int ELSE 0 END FROM t) = 0`,
+WHERE (SELECT CASE WHEN t.n > ${MAX_RESULT_BYTES} THEN ('${TOO_LARGE_MARKER}' || t.n::text)::int ELSE 0 END FROM t) = 0`,
       rowMode: 'array',
       queryMode: 'extended',
     } as pg.QueryArrayConfig;
