@@ -51,7 +51,7 @@ The server also sets these HTTP security headers on every response: `X-Content-T
 
 What is tested (counts are in "How it was verified" below):
 
-- **Validator:** 243 rejection cases (stacked statements, writes inside CTEs, comment tricks, `U&` escapes that hide a function name, catalogue and `pg_` access, and more) and 33 accept cases.
+- **Validator:** 257 rejection cases (stacked statements, writes inside CTEs, comment tricks, `U&` escapes that hide a function name, catalogue and `pg_` access, and more) and 33 accept cases.
 - **Read-only role:** every attack statement is run twice, once normally and once inside an explicit `READ WRITE` transaction, so the grants are shown to hold without help from the read-only default. A direct read of a raw table is denied, and so is creating a temp table. A separate group of tests records what the role does not stop (`pg_notify`, advisory locks and `lo_create` inside a read-write transaction).
 - **Executor:** timeout, row cap, result size limit, refusal of stacked statements, no state leaking between requests, no connection details in error messages.
 - **Rate limit and daily cap:** unit tests plus API tests, including that a refused request does not use up the daily cap.
@@ -153,14 +153,14 @@ All figures are from runs on a Windows machine with Node 24.19.0 and Docker 29.7
 
 | Fact | Result | Source |
 |---|---|---|
-| Server tests | 457 passed, 15 files | `npm test` (needs the loaded local database) |
+| Server tests | 515 passed, 18 files | `npm test` (needs the loaded local database) |
 | Web tests | 43 passed, 3 files | `npm test` |
-| Total tests | 500 | server and web above |
-| Validator cases | 283 (243 rejection, 33 accept, 7 output checks) | vitest JSON report for `server/test/validator.test.ts`, grouped by test group |
-| Read-only role tests | 14 | `server/test/readonly-role.test.ts` |
+| Total tests | 558 | server and web above |
+| Validator cases | 297 (257 rejection, 33 accept, 7 output checks) | vitest JSON report for `server/test/validator.test.ts`, grouped by test group |
+| Read-only role tests | 20 | `server/test/readonly-role.test.ts` |
 | JavaScript bundle | 71.02 kB gzip (226.23 kB raw) | `npm run build` output, Vite; `gzip -9` gives 70,086 bytes |
 | Docker image | 348 MB on disk | `docker images ask-your-database:local` |
-| Cached example answer | about 6 to 9 ms, local, warm | `elapsedMs` from `/api/examples/1/answer`, five calls to the local container |
+| Stored example answer | the first run took 12 ms locally (one measurement); later requests are served from memory | `elapsedMs` from `/api/examples/1/answer` on the local container |
 | Smoke script | 5 of 5 checks pass | `node scripts/smoke-live.mjs` against the local container with the fake model |
 | Database | Chinook 1.4.5, 11 tables, 11 views, 10,111 kB | `pg_database_size`; largest views: `playlist_tracks` 8,715 rows, `tracks` 3,503, `invoice_lines` 2,240, `invoices` 412 |
 | Gold answers | 10 golden questions, each with a view-based and an independent raw-table query that agree | `server/test/golden.test.ts` |
