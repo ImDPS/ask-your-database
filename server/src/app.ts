@@ -15,7 +15,7 @@ export interface AppDeps {
 }
 
 // A Vite-built page loads only its own scripts and styles and calls only its own /api.
-const CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
+const CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const GENERIC_ERROR = 'Something went wrong on the server. Please try again.';
 
 // Malformed JSON and oversized bodies come from express.json before any route runs.
@@ -113,7 +113,10 @@ export function createApp(deps: AppDeps) {
   app.use('/api', (_req, res) => res.status(404).json({ error: { kind: 'not_found', message: 'Not found.' } }));
 
   if (deps.staticDir) {
-    app.use(express.static(deps.staticDir));
+    app.use(express.static(deps.staticDir, { redirect: false }));
+    // A missing built file (a stale hashed name from an older page, for example) is a 404,
+    // not the page: serving index.html as a script or stylesheet only hides the real error.
+    app.use('/assets', (_req, res) => res.status(404).type('text/plain').send('Not found.'));
     app.get(/^\/(?!api(?:\/|$)).*/, (_req, res) => res.sendFile(path.resolve(deps.staticDir!, 'index.html')));
   }
   app.use(jsonErrors);

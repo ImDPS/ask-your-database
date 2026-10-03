@@ -254,7 +254,7 @@ describe('security headers', () => {
     expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['content-security-policy']).toBe(
-      "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+      "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     );
     expect(res.headers['x-powered-by']).toBeUndefined();
   });
@@ -337,3 +337,40 @@ describe('cached example answers are computed once per process', () => {
     } finally { spy.mockRestore(); }
   });
 });
+
+describe('static assets', () => {
+  const withDir = async (fn: (app: ReturnType<typeof make>['app']) => Promise<void>) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'static-'));
+    fs.mkdirSync(path.join(dir, 'assets'));
+    fs.writeFileSync(path.join(dir, 'index.html'), '<!doctype html><title>spa</title>');
+    fs.writeFileSync(path.join(dir, 'assets', 'app.js'), 'console.log(1)');
+    try { await fn(make(['x'], 100, 100, dir).app); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  };
+
+  it('serves a file that exists under /assets', async () => {
+    await withDir(async (app) => {
+      const res = await request(app).get('/assets/app.js');
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('console.log(1)');
+    });
+  });
+  it('answers 404, not the page, for a missing file under /assets', async () => {
+    await withDir(async (app) => {
+      for (const url of ['/assets/missing.js', '/assets/old-abc123.css', '/assets/', '/assets', '/assets/a/b.js']) {
+        const res = await request(app).get(url);
+        expect(res.status, url).toBe(404);
+        expect(res.text, url).not.toContain('<title>spa</title>');
+      }
+    });
+  });
+  it('still serves the page for other paths', async () => {
+    await withDir(async (app) => {
+      for (const url of ['/', '/some/page', '/assetsfoo', '/?example=2']) {
+        const res = await request(app).get(url);
+        expect(res.status, url).toBe(200);
+        expect(res.text, url).toContain('<title>spa</title>');
+      }
+    });
+  });
+});
+
