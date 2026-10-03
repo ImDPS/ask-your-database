@@ -1,0 +1,14 @@
+{
+  "name": "ask-your-database",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "test": "npm run test -w server && npm run test -w web --if-present",
+    "build": "npm run build -w web && npm run build -w server",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down"
+  }
+}
